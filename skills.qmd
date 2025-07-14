@@ -21,10 +21,6 @@ library(purrr)
 conflicts_prefer(dplyr::filter)
 conflicts_prefer(plotly::layout)
 #constants------------
-set.seed(1)
-group_size <- 50
-n_components <- 10
-n_sim <- 1000
 breaks <- seq(0, 100, 10)
 labels <- paste0(breaks[-length(breaks)], "-", breaks[-1])
 #functions-------------------
@@ -80,7 +76,7 @@ animate_distribution <- function(tbbl, skill_name) {
         line = list(color = 'black', width = 2)
       ),
       showlegend = FALSE,
-      name = "Baseline"
+      name = "2015"
     ) |>
     # Add animated bars
     add_bars(
@@ -88,9 +84,9 @@ animate_distribution <- function(tbbl, skill_name) {
       x = ~bin,
       y = ~prop,
       frame = ~year,
-      marker = list(color = 'rgba(30,144,255,0.6)'),  # Semi-transparent steelblue
+      marker = list(color = 'rgba(0,0,0,0.25)'), 
       showlegend = FALSE,
-      name = "Animated"
+      name = ~year
     ) |>
     layout(
       title = skill_name,
@@ -163,7 +159,7 @@ crossed <- joined|>
   )
 #weighted means over time----------------------------------
 historic_growth <- ggplot(crossed|>filter(source=="LFS"), aes(x=cagr, y=fct_reorder(skills_competencies, cagr))) +
-  geom_col()+
+  geom_col(alpha=.5)+
   labs(title="Historic growth (2015-2024)",
        x=NULL,
        y=NULL) +
@@ -172,7 +168,7 @@ historic_growth <- ggplot(crossed|>filter(source=="LFS"), aes(x=cagr, y=fct_reor
   theme(text=element_text(size=12))
 
 future_growth <- ggplot(crossed|>filter(source=="LMO"), aes(x=cagr, y=fct_reorder(skills_competencies, cagr))) +
-  geom_col()+
+  geom_col(alpha=.5)+
   labs(title="Future growth (2025-2035) ",
        x=NULL,
        y=NULL) +
@@ -181,7 +177,7 @@ future_growth <- ggplot(crossed|>filter(source=="LMO"), aes(x=cagr, y=fct_reorde
   theme(text=element_text(size=12))
 
 current_level <- ggplot(crossed|>filter(source=="LFS"), aes(x=last, y=fct_reorder(skills_competencies, last))) +
-  geom_col()+
+  geom_col(alpha=.5)+
   labs(title="Current (2024) skill scores",
        x=NULL,
        y=NULL)+
@@ -219,7 +215,9 @@ emp_teer <- emp|>
   unnest(data)
 ```
 
-In order for the BC economy to thrive it is essential that the skills of the workforce match the needs of employers. However, the labour market is constantly evolving both in terms of occupational composition as well as the skills required for each specific occupation. In this note we focus exclusively on composition changes, and make the assumption that all occupational skill profiles are constant.  This assumption is supported by data frequency: employment by occupation is available (and variable) monthly in the Labour Force Survey, whereas the O\*NET skills data uses a rolling update schedule, completing a full refresh of all occupations every five years.    
+In order for the BC economy to thrive it is essential that the skills of the workforce match the needs of employers. However, the labour market is constantly evolving both in terms of occupational composition as well as the skills required for each specific occupation. In this note we focus exclusively on composition changes, and make the assumption that occupational skill profiles are constant.  This assumption is supported by data frequency: employment by occupation is available (and variable) monthly in the Labour Force Survey, whereas the O\*NET skills data uses a rolling update schedule, completing a full refresh of all occupations every five years. 
+
+The goal is to identify the skills that are becoming more important in the labour market.  We begin by quantifying the broad shifts in the labour market by looking at how the TEER composition has changed historically, and is forecast to change over the 10 years covered by the labour market outlook.  Once we have established the broad shifts in the labour market, we start the analysis by comparing the current skill profiles of HOOs (High Opportunity Occupations) to the rest of the labour market. Finally we look at how the distribution of skills is changing over time, both historically (2015-2024) and in the future (2025-2035).
 
 ## A first look: breakdown by TEER
 
@@ -270,18 +268,151 @@ plot_ly(data = emp_teer, x = ~year, y = ~employed, color = ~teer, type = 'scatte
   )
 ```
 
+## High opportunity skills
+
+In recognition of the changing labour market, the British Columbia Labour Market Outlook identifies certain occupations as being High Opportunity Occupations (HOOs), on the basis of seven economic indicators. These indicators can be grouped into four categories, which are based on current and future labour market conditions. Each occupation is given a score based on its ranking in each of the seven economic indicators, and scores are weighted based on their labour market impact. The occupations are then sorted by score, and the 125 occupations with the highest scores become High Opportunity Occupations.  
+
+In what follows we create two weighted average skill profiles, one for the high opportunity occupations and one for the rest of the labour market (left panel below). It is evident that high opportunity occupations require higher skills, with a few exceptions e.g. repairing and equipement maintenance.  We then investigate the relative (middle panel) and absolute differences (right panel) in these two weighted average skill profiles, to identify what we will call high opportunity skills: the skills that have both relatively and absolutely higher scores in high opportunity occupations compared to the rest of the labour market: e.g. Science and Operations Analysis.  The relative differences are expressed as a ratio, while the absolute differences are expressed in points.
+
+
+```{r, fig.width=14, fig.height=8, echo=FALSE, message=FALSE}
+hoo <- read_excel(here("data","high-opportunity-occupations-bc-and-regions.xlsx"), 
+    sheet = "HOO BC")|>
+  select(noc_5=NOC)|>
+  mutate(noc_5=str_remove_all(noc_5, "#"))
+
+skills_unnested <- skills|>
+  unnest(score_by_noc)
+
+not_hoo <- skills_unnested|>
+  ungroup()|>
+  select(noc_5)|>
+  distinct()|>
+  anti_join(hoo)
+
+most_recent_emp <- hist_emp|>
+  ungroup()|>
+  filter(year==max(year))
+
+hoo_weights <- most_recent_emp|>
+  filter(noc_5 %in% hoo$noc_5)|>
+  mutate(prop=employed/sum(employed, na.rm=TRUE))|>
+  select(noc_5, prop)
+
+not_hoo_weights <- most_recent_emp|>
+  filter(noc_5 %in% not_hoo$noc_5)|>
+  mutate(prop=employed/sum(employed, na.rm=TRUE))|>
+  select(noc_5, prop)
+
+#need to check this stuff-------------------
+
+hoo_skills <- skills_unnested|>
+  right_join(hoo_weights, by="noc_5")|>
+  group_by(skills_competencies)|>
+  summarize(weighted_average = sum(composite_score * prop, na.rm = TRUE))|>
+  mutate(group = "High Opportunity Occupations")|>
+  na.omit()
+
+not_hoo_skills <- skills_unnested|>
+  right_join(not_hoo_weights, by="noc_5")|>
+  group_by(skills_competencies)|>
+  summarize(weighted_average = sum(composite_score * prop, na.rm = TRUE))|>
+  mutate(group = "Other Occupations")
+
+skills <- bind_rows(hoo_skills, not_hoo_skills)
+
+skills_plt <- skills|>
+  ggplot(aes(x=weighted_average, y=fct_reorder(skills_competencies, weighted_average), fill=group)) +
+  geom_col(position="dodge", alpha=.5, width=.7) +
+  labs(title="Weighted average skill scores",
+       x=NULL,
+       y=NULL) +
+  scale_fill_manual(values=c("High Opportunity Occupations"="#1f77b4", "Other Occupations"="#ff7f0e")) +
+  theme_minimal() +
+  theme(text=element_text(size=12)) + 
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.box = "horizontal")
+
+diffs <- skills|>
+  pivot_wider(names_from=group, values_from=weighted_average)|>
+  mutate(absolute_diff = `High Opportunity Occupations` - `Other Occupations`,
+         relative_diff= `High Opportunity Occupations` / `Other Occupations`) |>
+  arrange(desc(relative_diff))
+
+
+relative_plt <- ggplot(diffs, aes(x=relative_diff, y=fct_reorder(skills_competencies, relative_diff))) +
+  geom_vline(xintercept=1, color="grey70", lwd=.5)+
+  geom_col(alpha=.5)+
+  labs(title="HOO / Other",
+       x=NULL,
+       y=NULL) +
+  theme_minimal() +
+  theme(text=element_text(size=12))
+
+absolute_plt <- ggplot(diffs, aes(x=absolute_diff, y=fct_reorder(skills_competencies, absolute_diff))) +
+  geom_col(alpha=.5)+
+  labs(title="HOO - Other",
+       x=NULL,
+       y=NULL) +
+  theme_minimal() +
+  theme(text=element_text(size=12))
+
+skills_plt + relative_plt  + absolute_plt +
+   plot_annotation(caption = "Source: Skills data (ONET), Employment data (LFS 2024) ")
+```
+
 ## Mean values and growth rates of skills
 
-One way to get a broad overview of the skills required in the labour market is to look at the weighted average of the skill scores, and their growth rates.  Specifically, we weight the occupation skill scores by the proportion of employed people in each occupation, in each year. This gives us a sense of how important each skill is currently, and how it is changing over time.  The following plot shows the weighted average skill scores in 2024 and the compound annual growth rate (CAGR) of these weighted average skill scores from 2015 to 2024, and from 2025 to 2035.
+An alternative way to investigate the changes in required skills over time is to look at the labour market as a whole, making comparisons across time. The measure that we compare is the weighted average of the skill scores, and then we calculate growth rates for the weighted average skill scores.  Specifically, we weight the occupation skill scores by the proportion of employed people in each occupation, in each year. This gives us a sense of how important each skill is currently, and how it is changing over time.  The following plot shows the weighted average skill scores in 2024 and the compound annual growth rate (CAGR) of these weighted average skill scores from 2015 to 2024, and from 2025 to 2035.
 
 ```{r, fig.width=14, fig.height=7, echo=FALSE}
 current_level+ historic_growth + future_growth +
    plot_annotation(caption = "Source: Skills data (ONET), Employment data (LFS & LMO)")
 ```
 
-## Distribution of skills over time
+## Differences in the distribution of skills 2015 vs. 2024  
 
-Weighted averages collapse the distribution of skills into a single number which hides important information. To get a better understanding of how the skills are distributed, we can look at the distribution of skill scores over time.  The following plots show the distribution of skill scores over time. The x-axis represents the binned skill scores, and the y-axis represents the proportion of employed people with that skill score. The animation shows how the distribution changes over time.
+Weighted averages collapse all the occupations' skill scores into a single number potentially hiding distributional differences.  Next we bin the skill scores into 10 bins, and calculate the proportion of employed people with each skill score in each year. This allows us to see how the distribution of skills is changing over time. The bins are defined as follows: 0-10, 10-20, ..., 90-100. The following plot shows the distribution of skill scores in 2015 and 2024, with the black outlines representing the 2015 distribution and the filled bars representing the 2024 distribution.
+
+
+
+```{r, fig.width=14, fig.height=10, echo=FALSE}
+
+fastest <- crossed|>
+  filter(source=="LFS")|>
+  ungroup()|>
+  slice_max(cagr, n=6, with_ties = FALSE)|>
+  select(skills_competencies, cagr)
+
+binned_props_2015 <- binned_props|>
+  filter(year == 2015)|>
+  inner_join(fastest, by="skills_competencies")|>
+  mutate(year = factor(year, levels = c(2015, 2024)))
+
+binned_props_2024 <- binned_props|>
+  filter(year == 2024)|>
+  inner_join(fastest, by="skills_competencies")|>
+  mutate(year = factor(year, levels = c(2015, 2024)))
+
+ggplot(mapping=aes(x=bin, y=prop)) +
+  geom_col(data = binned_props_2024, alpha=.5) +
+  geom_col(data = binned_props_2015, fill = NA, color = "black") +
+  scale_y_continuous(trans="log1p") +
+  facet_wrap(~fct_reorder(skills_competencies, cagr, .desc=TRUE), nrow=2) +
+  labs(title="Distribution of skills in BC labour market",
+       subtitle="Black outlines for 2015, filled bars for 2024: bins that do not look 'full' are diminishing over time, 'overflowing' bins are growing",
+       x="Binned Skill scores",
+       y="Proportion of employed people with that skill score")+
+  theme_minimal() +
+  theme(text=element_text(size=12),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## Animated distribution of skills over time
+
+Finally, we can animate the distribution of skills over time. The following plot shows the distribution of skill scores for each skill in each year, with the black outlines representing the 2015 distribution and the filled bars representing the distribution in the current year. The animation allows us to see how the distribution of skills is changing over time. The animation gives an indication of whether the changes between 2015 and 2024 were smooth, or perhaps the result of noise.
 
 
 ### 
